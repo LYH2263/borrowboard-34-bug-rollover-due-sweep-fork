@@ -30,7 +30,7 @@ async function load() {
     const b = await api('/board')
     board.value = b
     counts.value = b.counts || {}
-    renewSweepFork.value = !!(b.renew_meta && b.renew_meta.stale !== b.renew_meta.fresh)
+    renewSweepFork.value = !!(b.renew_meta && b.renew_meta.changed > 0)
     loadErr.value = ''
   } catch (e) {
     board.value = prev

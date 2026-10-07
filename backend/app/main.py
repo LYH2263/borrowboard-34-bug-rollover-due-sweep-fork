@@ -55,18 +55,23 @@ def items():
 @app.get("/api/board")
 def board():
     today = today_iso()
-    # 续借与读取在同一个写事务内完成：顶细条拿到的分类一定是续借后的同一套数，
-    # 不会先标逾期再改回来；写锁也挡住零点的借出/归还。
+    # 续借、读开关、读借据在同一个写事务内完成：分类用的 auto flag 与落库的续借
+    # 是同一个事实源，顶细条拿到的分类一定是续借后的同一套数，不会栏按续借后、
+    # 扫按开关关；写锁也挡住零点的借出/归还。
     with write_tx() as c:
+        before = rc.snapshot_before_renew([
+            dict(r) for r in c.execute(
+                """SELECT loans.*, items.title FROM loans
+                   JOIN items ON items.id=loans.item_id
+                   WHERE loans.status='active'""")])
         apply_renewals(c, today)
-        auto = _auto_renew_on(c)
+        auto = rc.board_auto_flag(_auto_renew_on(c))
         available = [dict(r) for r in c.execute("SELECT * FROM items WHERE status='available'")]
         loans = [dict(r) for r in c.execute(
             """SELECT loans.*, items.title FROM loans JOIN items ON items.id=loans.item_id
                WHERE loans.status='active'""")]
-        stale_loans = rc.snapshot_before_renew(loans)
-        renew_meta = rc.renew_note(stale_loans, loans)
-    cls = rc.classify_after_renew(stale_loans, today, classify_loans)
+        renew_meta = rc.renew_note(before, loans)
+    cls = rc.classify_after_renew(loans, today, classify_loans, auto)
     return {
         "available": available,
         "active": cls["active"],
@@ -136,13 +141,14 @@ def return_loan(lid: int):
 @app.get("/api/loans")
 def loans():
     today = today_iso()
+    # 借还记录与顶细条同一规则、同一 flag：续借在写事务内落库，auto 在该事务内读出，
+    # 分类不得再以硬编码"关"现算，否则逾期段与在借段会各跟一天。
     with write_tx() as c:
         apply_renewals(c, today)
-        auto = _auto_renew_on(c)
+        auto = rc.board_auto_flag(_auto_renew_on(c))
         rows = [dict(r) for r in c.execute(
             "SELECT loans.*, items.title FROM loans JOIN items ON items.id=loans.item_id ORDER BY loans.id DESC")]
-        stale_rows = rc.snapshot_before_renew(rows)
-    return rc.classify_after_renew(stale_rows, today, classify_loans)
+    return rc.classify_after_renew(rows, today, classify_loans, auto)
 
 @app.get("/api/settings")
 def get_settings():

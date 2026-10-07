@@ -7,7 +7,13 @@
 from datetime import date as _date
 
 def _parse(s: str):
-    return _date.fromisoformat(s) if s else None
+    # 脏数据（自由文本录错的日子）按"无日期"降级，不得让整板扫名单崩掉
+    if not s:
+        return None
+    try:
+        return _date.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
 
 def effective_due_date(due_date: str, today: str, auto_renew: bool) -> str | None:
     """开关打开且已过应还日的 active 借据：越过几个午夜就补几天，

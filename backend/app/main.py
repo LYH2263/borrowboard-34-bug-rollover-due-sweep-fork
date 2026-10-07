@@ -58,15 +58,19 @@ def board():
     # 续借与读取在同一个写事务内完成：顶细条拿到的分类一定是续借后的同一套数，
     # 不会先标逾期再改回来；写锁也挡住零点的借出/归还。
     with write_tx() as c:
+        # 续借前的名单快照必须在补续之前取，stale 才名符其实
+        stale_loans = rc.snapshot_before_renew([dict(r) for r in c.execute(
+            """SELECT loans.*, items.title FROM loans JOIN items ON items.id=loans.item_id
+               WHERE loans.status='active'""")])
         apply_renewals(c, today)
         auto = _auto_renew_on(c)
         available = [dict(r) for r in c.execute("SELECT * FROM items WHERE status='available'")]
         loans = [dict(r) for r in c.execute(
             """SELECT loans.*, items.title FROM loans JOIN items ON items.id=loans.item_id
                WHERE loans.status='active'""")]
-        stale_loans = rc.snapshot_before_renew(loans)
         renew_meta = rc.renew_note(stale_loans, loans)
-    cls = rc.classify_after_renew(stale_loans, today, classify_loans)
+    # 逾期扫带现行开关：与续借闸同一条规则，栏与扫同一世界
+    cls = rc.classify_after_renew(loans, today, classify_loans, auto)
     return {
         "available": available,
         "active": cls["active"],
@@ -141,8 +145,8 @@ def loans():
         auto = _auto_renew_on(c)
         rows = [dict(r) for r in c.execute(
             "SELECT loans.*, items.title FROM loans JOIN items ON items.id=loans.item_id ORDER BY loans.id DESC")]
-        stale_rows = rc.snapshot_before_renew(rows)
-    return rc.classify_after_renew(stale_rows, today, classify_loans)
+    # 与 /api/board 同一把扫：续借后的名单 + 现行开关，两个出口不得两套数
+    return rc.classify_after_renew(rows, today, classify_loans, auto)
 
 @app.get("/api/settings")
 def get_settings():
